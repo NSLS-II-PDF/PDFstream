@@ -10,7 +10,7 @@ import pdfstream.io as io
 from pdfstream.callbacks.analysis import AnalysisConfig, VisConfig, ExportConfig, AnalysisStream, Exporter, \
     Visualizer
 from pdfstream.callbacks.calibration import CalibrationConfig, Calibration
-from pdfstream.servers.base import ServerConfig, BaseServer
+from pdfstream.servers.base import ServerConfig, BaseServer, BaseServerKafka
 
 
 class XPDConfig(CalibrationConfig, AnalysisConfig, VisConfig, ExportConfig):
@@ -51,12 +51,24 @@ class XPDServerConfig(ServerConfig, XPDConfig):
     pass
 
 
-class XPDServer(BaseServer):
+class XPDServerZMQ(BaseServer):
     """The server of XPD data analysis. It is a live dispatcher with XPDRouter subscribed."""
     def __init__(self, config: XPDServerConfig):
         super(XPDServer, self).__init__(config)
         self.subscribe(XPDRouter(config))
 
+
+class XPDServerKafka(BaseServerKafka):
+    """The server of XPD data analysis. It is a live dispatcher with XPDRouter subscribed."""
+    def __init__(self, config: XPDServerConfig):
+        super(XPDServer, self).__init__(config)
+        xpd_router = XPDRouter(config)
+        msg = f"{xpd_router = }"
+        io.server_message(msg)
+        self.subscribe(xpd_router)
+
+# XPDServer = XPDServerZMQ
+XPDServer = XPDServerKafka
 
 def make_and_run(
     cfg_file: str = None,

@@ -1,8 +1,12 @@
 import typing
+import uuid
 from configparser import ConfigParser
 
 from bluesky.callbacks import CallbackBase
-from bluesky.callbacks.zmq import RemoteDispatcher
+from bluesky.callbacks.zmq import RemoteDispatcher as RemoteDispatcherZMQ
+from bluesky_kafka import RemoteDispatcher as RemoteDispatcherKafka
+
+from nslsii.kafka_utils import _read_bluesky_kafka_config_file
 
 from pdfstream.io import server_message
 from pdfstream.vend.qt_kicker import install_qt_kicker
@@ -38,7 +42,7 @@ class ServerConfig(ConfigParser):
         return returned
 
 
-class BaseServer(RemoteDispatcher):
+class BaseServer(RemoteDispatcherZMQ):
     """The basic server class."""
 
     def __init__(self, config: ServerConfig):
@@ -57,6 +61,37 @@ class BaseServer(RemoteDispatcher):
 
     def install_qt_kicker(self):
         install_qt_kicker(self.loop)
+
+
+class BaseServerKafka(RemoteDispatcherKafka):
+    """The basic server class using Kafka message bus."""
+
+    def __init__(self, config: ServerConfig):
+        self._beamline_acronym = "xpd"
+        unique_group_id = f"echo-{self._beamline_acronym}-{str(uuid.uuid4())[:8]}"
+        kafka_config = _read_bluesky_kafka_config_file(config_file_path="/etc/bluesky/kafka.yml")
+        print(f"{kafka_config = }")
+        self._topics = [f"{self._beamline_acronym}.bluesky.runengine.documents"]
+        super().__init__(
+            topics=self._topics,
+            bootstrap_servers=",".join(kafka_config["bootstrap_servers"]),
+            group_id=unique_group_id,
+            consumer_config=kafka_config["runengine_producer_config"],)
+        self._config = config
+        self._kafka_config = kafka_config
+
+    def start(self):
+        try:
+            server_message(
+                "Server is started. " +
+                "Listen to {}, topics {}.".format(self._kafka_config["bootstrap_servers"], self._topics)
+            )
+            super().start()
+        except KeyboardInterrupt:
+            server_message("Server is terminated.")
+
+    def install_qt_kicker(self):
+        pass
 
 
 class StartStopCallback(CallbackBase):
