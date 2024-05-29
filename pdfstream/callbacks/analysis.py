@@ -5,6 +5,7 @@ import typing as tp
 from configparser import ConfigParser
 from pathlib import Path
 
+import databroker.mongo_normalized
 import event_model
 import matplotlib.pyplot as plt
 import numpy as np
@@ -217,7 +218,7 @@ class AnalysisStream(LiveDispatcher):
         # create directoy
         d = self.config.directory
         fp = self.config.file_prefix
-        self.dirc = Path(d).expanduser().joinpath(new_start["sample_name"])
+        self.dirc = Path(str(Path(d).expanduser().joinpath(new_start["sample_name"])).format(start=doc))
         if self.config.save_file:
             self.dirc.mkdir(parents=True, exist_ok=True)
         # create file prefix
@@ -286,6 +287,10 @@ class AnalysisStream(LiveDispatcher):
         # filter the data
         if self.valid_keys:
             an_data = self.filter(an_data)
+
+        # Enter the information to Tiled:
+        ...
+
         # the final output data is a combination of the independent variables and processed data
         return dict(**raw_data, **an_data)
 
@@ -444,11 +449,14 @@ class Exporter(RunRouter):
     """Export the processed data to file systems. Add readable_time to start doc."""
 
     def __init__(self, config: ExportConfig):
+        self._config = config
         factory = ExporterFactory(config)
-        super().__init__([factory])
-        io.server_message("Data will be exported in '{}'.".format(str(config.tiff_base)))
+        super().__init__([factory], handler_registry=databroker.mongo_normalized.discover_handlers())
+        io.server_message("Data will be exported in '{}' in a proposal directory.".format(str(config.tiff_base)))
 
     def start(self, start_doc):
+        save_dir = self._config.tiff_base.joinpath(self._config.directory_template.format(start=start_doc))
+        io.server_message("Data will be exported in '{}'.".format(save_dir))
         io.server_message("Receive the start of '{}'.".format(start_doc["uid"]))
         return super(Exporter, self).start(start_doc)
 

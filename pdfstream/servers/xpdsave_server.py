@@ -1,5 +1,5 @@
 from pdfstream.callbacks.analysis import ExportConfig, Exporter
-from pdfstream.servers.base import BaseServer, ServerConfig
+from pdfstream.servers.base import BaseServer as BaseServerZMQ, ServerConfig, BaseServerKafkaAnalysis
 
 
 class XPDSaveServerConfig(ServerConfig, ExportConfig):
@@ -7,7 +7,10 @@ class XPDSaveServerConfig(ServerConfig, ExportConfig):
     pass
 
 
-class XPDSaveServer(BaseServer):
+# BaseServerClass = BaseServerZMQ
+BaseServerClass = BaseServerKafkaAnalysis
+
+class XPDSaveServer(BaseServerClass):
     """A server that saves the analyzed data from the xpd server."""
 
     def __init__(self, config: XPDSaveServerConfig):

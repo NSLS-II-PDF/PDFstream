@@ -1,6 +1,7 @@
 import typing
 import uuid
 from configparser import ConfigParser
+from enum import Enum
 
 from bluesky.callbacks import CallbackBase
 from bluesky.callbacks.zmq import RemoteDispatcher as RemoteDispatcherZMQ
@@ -63,28 +64,51 @@ class BaseServer(RemoteDispatcherZMQ):
         install_qt_kicker(self.loop)
 
 
-class BaseServerKafka(RemoteDispatcherKafka):
-    """The basic server class using Kafka message bus."""
+def _get_kafka_config(topic):
+    kafka_dict = {
+        "topics": [f"{topic}.bluesky.runengine.documents"],
+        "group_id": f"echo-{topic}-{str(uuid.uuid4())[:8]}",
+        "kafka_config": _read_bluesky_kafka_config_file(config_file_path="/etc/bluesky/kafka.yml"),
+    }
+    kafka_dict["bootstrap_servers"] = ",".join(kafka_dict["kafka_config"]["bootstrap_servers"])
+    return kafka_dict
+
+
+def _get_kafka_producer_config(topic):
+    kafka_dict = _get_kafka_config(topic=topic)
+    key = kafka_dict.pop("group_id")
+    topics = kafka_dict.pop("topics")
+    kafka_config = kafka_dict.pop("kafka_config")
+    return {"producer_config": kafka_config["runengine_producer_config"], "key": key, "topic": topics[0], **kafka_dict}
+
+
+def _get_kafka_consumer_config(topic):
+    kafka_dict = _get_kafka_config(topic=topic)
+    kafka_config = kafka_dict.pop("kafka_config")
+    return {"consumer_config": kafka_config["runengine_producer_config"], **kafka_dict}
+
+
+class KafkaTopics(Enum):
+    raw = "xpd"
+    analysis = "xpd-ldrd20-31"
+
+
+class BaseServerKafkaRaw(RemoteDispatcherKafka):
+    """The basic server class using Kafka message bus for consuming the raw data."""
+    topic = KafkaTopics.raw.value
 
     def __init__(self, config: ServerConfig):
-        self._beamline_acronym = "xpd"
-        unique_group_id = f"echo-{self._beamline_acronym}-{str(uuid.uuid4())[:8]}"
-        kafka_config = _read_bluesky_kafka_config_file(config_file_path="/etc/bluesky/kafka.yml")
-        print(f"{kafka_config = }")
-        self._topics = [f"{self._beamline_acronym}.bluesky.runengine.documents"]
-        super().__init__(
-            topics=self._topics,
-            bootstrap_servers=",".join(kafka_config["bootstrap_servers"]),
-            group_id=unique_group_id,
-            consumer_config=kafka_config["runengine_producer_config"],)
+
+        kafka_dict = _get_kafka_consumer_config(topic=self.topic)
+        super().__init__(**kafka_dict)
         self._config = config
-        self._kafka_config = kafka_config
+        self._kafka_dict = kafka_dict
 
     def start(self):
         try:
             server_message(
                 "Server is started. " +
-                "Listen to {}, topics {}.".format(self._kafka_config["bootstrap_servers"], self._topics)
+                "Listen to {}, topics {}.".format(self._kafka_dict["bootstrap_servers"], self._kafka_dict["topics"])
             )
             super().start()
         except KeyboardInterrupt:
@@ -92,6 +116,11 @@ class BaseServerKafka(RemoteDispatcherKafka):
 
     def install_qt_kicker(self):
         pass
+
+
+class BaseServerKafkaAnalysis(BaseServerKafkaRaw):
+    """The basic server class using Kafka message bus for producing analysis data."""
+    topic = KafkaTopics.analysis.value
 
 
 class StartStopCallback(CallbackBase):

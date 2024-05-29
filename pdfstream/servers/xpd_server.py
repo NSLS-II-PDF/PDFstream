@@ -1,16 +1,20 @@
 """The analysis server. Process raw image to PDF."""
 import typing as tp
+import uuid
 
 import databroker.mongo_normalized
-from bluesky.callbacks.zmq import Publisher
+from bluesky.callbacks.zmq import Publisher as PublisherZMQ
+from bluesky_kafka import Publisher as PublisherKafkaAnalysis
 from databroker.v1 import Broker
 from event_model import RunRouter
+
+from nslsii.kafka_utils import _read_bluesky_kafka_config_file
 
 import pdfstream.io as io
 from pdfstream.callbacks.analysis import AnalysisConfig, VisConfig, ExportConfig, AnalysisStream, Exporter, \
     Visualizer
 from pdfstream.callbacks.calibration import CalibrationConfig, Calibration
-from pdfstream.servers.base import ServerConfig, BaseServer, BaseServerKafka
+from pdfstream.servers.base import ServerConfig, BaseServer as BaseServerZMQ, BaseServerKafkaRaw, BaseServerKafkaAnalysis, _get_kafka_producer_config, KafkaTopics
 
 
 class XPDConfig(CalibrationConfig, AnalysisConfig, VisConfig, ExportConfig):
@@ -51,24 +55,16 @@ class XPDServerConfig(ServerConfig, XPDConfig):
     pass
 
 
-class XPDServerZMQ(BaseServer):
+# BaseServerClass = BaseServerZMQ
+BaseServerClass = BaseServerKafkaRaw
+
+
+class XPDServer(BaseServerClass):
     """The server of XPD data analysis. It is a live dispatcher with XPDRouter subscribed."""
     def __init__(self, config: XPDServerConfig):
         super(XPDServer, self).__init__(config)
         self.subscribe(XPDRouter(config))
 
-
-class XPDServerKafka(BaseServerKafka):
-    """The server of XPD data analysis. It is a live dispatcher with XPDRouter subscribed."""
-    def __init__(self, config: XPDServerConfig):
-        super(XPDServer, self).__init__(config)
-        xpd_router = XPDRouter(config)
-        msg = f"{xpd_router = }"
-        io.server_message(msg)
-        self.subscribe(xpd_router)
-
-# XPDServer = XPDServerZMQ
-XPDServer = XPDServerKafka
 
 def make_and_run(
     cfg_file: str = None,
@@ -114,6 +110,9 @@ class XPDRouter(RunRouter):
             handler_registry=databroker.mongo_normalized.discover_handlers()
         )
 
+# Publisher = PublisherZMQ
+Publisher = PublisherKafkaAnalysis
+
 
 class XPDFactory:
     """The factory to generate callback for xpd data reduction."""
@@ -137,6 +136,9 @@ class XPDFactory:
                     pub_config["address"][0], pub_config["address"][1], pub_config["prefix"]
                 )
             )
+
+            # Kafka configuration for Producer:
+            pub_config = _get_kafka_producer_config(KafkaTopics.analysis.value)
             self.analysis[0].subscribe(Publisher(**pub_config))
             if self.calibration:
                 self.calibration[0].subscribe(Publisher(**pub_config))
