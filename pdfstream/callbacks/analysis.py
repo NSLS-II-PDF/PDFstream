@@ -180,7 +180,7 @@ class AnalysisStream(LiveDispatcher):
         self.dirc = None
         self.file_prefix = None
 
-        self._tiled_catalog = from_uri("https://tiled.nsls2.bnl.gov/api/v1/metadata/xpd/sandbox")
+        self._tiled_client = from_uri("https://tiled.nsls2.bnl.gov/api/v1/metadata/xpd/sandbox")
 
     def start(self, doc, _md=None):
         io.server_message("Receive the start of '{}'.".format(doc["uid"]))
@@ -281,7 +281,7 @@ class AnalysisStream(LiveDispatcher):
             if k in data_dict:
                 metadata[k] = data_dict[k]
 
-        entry = self._tiled_catalog.write_dataframe(df, metadata=metadata)
+        entry = self._tiled_client.write_dataframe(df, metadata=metadata)
         entry_uri = entry.uri
         entry_uid = self._get_uid_from_uri(entry_uri)
 
@@ -373,7 +373,7 @@ class AnalysisStream(LiveDispatcher):
         # Arrays:
         for key in ["dk_sub_image", "mask"]:
             tiled_key = f"tiled_{key}"
-            entry = self._tiled_catalog.write_array(
+            entry = self._tiled_client.write_array(
                 an_data[key],
                 metadata={"field": key, **default_md})
             entry_uri = entry.uri
@@ -541,6 +541,52 @@ class ExportConfig(ConfigParser):
 class TiledClientTypeException(Exception):
     ...
 
+def fill_data_from_tiled(data, tiled_client):
+    """The helper function to fill the event's data field with the data from sandbox Tiled.
+
+    Parameters
+    ----------
+        data (dict): a subset of the event document via the 'data' key).
+        tiled_client (tiled.client...): a Tiled client instance.
+
+    Examples
+    --------
+
+    Queueries can look like that:
+
+        In [69]: queries
+        Out[69]:
+        {'32cf499e-0b28-4806-a83f-111f993812e6': <ArrayClient shape=(2048, 2048) chunks=((2048,), (2048,)) dtype=float64>,
+        'fef412dd-88a3-48eb-8c12-93883a7983ea': <DataFrameClient ['gr_G', 'gr_r']>,
+        '9c1470af-dbd3-40f6-bea8-f5058e6bb146': <ArrayClient shape=(2048, 2048) chunks=((2048,), (2048,)) dtype=float64>,
+        '41ad8fdf-12d0-4c1a-b057-87032ba6f34b': <DataFrameClient ['fq_F', 'fq_Q', 'sq_Q', 'sq_S']>,
+        '6e2eedec-2a03-421a-96e4-59f77a27213c': <DataFrameClient ['chi_2theta', 'chi_Q', 'chi_I']>}
+    """
+    all_values = list(data.values())
+    all_uids = [x for x in all_values if type(x) is str]
+    queries = {}
+
+    for uid in set(all_uids):
+        queries[uid] = tiled_client[uid]
+
+    for key in data:
+        if key.startswith("tiled_"):  # the values are dictionaries (can't be used as keys)
+            continue
+        client = queries.get(data[key], None)  # check if the uid (=data[key]) is in the 'queries' keys, otherwise skip the filling.
+        if client is None:
+            continue
+        if isinstance(client, ArrayClient):  # image data
+            data[key] = client.read()
+        elif isinstance(client, DataFrameClient):  # Pandas DataFrames
+            new_key = key
+            if key in ["iq_I", "iq_Q"]:  # special case
+                new_key = key.replace("iq", "chi")
+            data[key] = np.array(client.read()[new_key])
+        else:
+            raise TiledClientTypeException(f"Unknown tiled client type: {type(client)}")
+
+    return data
+
 
 class Exporter(RunRouter):
     """Export the processed data to file systems. Add readable_time to start doc."""
@@ -551,9 +597,7 @@ class Exporter(RunRouter):
         super().__init__([factory], handler_registry=databroker.mongo_normalized.discover_handlers())
         io.server_message("Data will be exported in '{}' in a proposal directory.".format(str(config.tiff_base)))
 
-        self._tiled_catalog = from_uri("https://tiled.nsls2.bnl.gov/api/v1/metadata/xpd/sandbox")
-
-        self._descriptors = {}
+        self._tiled_client = from_uri("https://tiled.nsls2.bnl.gov/api/v1/metadata/xpd/sandbox")
 
     def start(self, start_doc):
         save_dir = self._config.tiff_base.joinpath(self._config.directory_template.format(start=start_doc))
@@ -562,61 +606,16 @@ class Exporter(RunRouter):
         return super(Exporter, self).start(start_doc)
 
     def descriptor(self, doc):
-        '''Use `descriptor` doc to map stream_names to descriptor uid's.
-
-        This method uses the descriptor document information to map the
-        stream_names to descriptor uid's.
-
-        Parameters:
-        -----------
-        doc : dict
-            EventDescriptor document
-        '''
-        from pprint import pformat
-        print(f"{self.__class__.__name__} descriptor (before): {pformat(doc)}")
-        # record the doc for later use
-        # self._descriptors[doc['uid']] = doc
         doc["data_keys"]["dk_sub_image"].update({"dtype": "array", "shape": [-1, -1]})
-        print(f"{self.__class__.__name__} descriptor (after): {pformat(doc)}")
         super().descriptor(doc)
 
     def event(self, doc):
         from pprint import pformat
         print(f"{self.__class__.__name__} (before filling from Tiled): {pformat(doc)}")
 
-        # Get information for all entries in 'an_data' dict from Tiled:
         data = doc["data"]
-
-        all_values = list(data.values())
-        all_uids = [x for x in all_values if type(x) is str]
-        queries = {}
-
-        for uid in set(all_uids):
-            queries[uid] = self._tiled_catalog[uid]
-
-        # In [69]: queries
-        # Out[69]:
-        # {'32cf499e-0b28-4806-a83f-111f993812e6': <ArrayClient shape=(2048, 2048) chunks=((2048,), (2048,)) dtype=float64>,
-        #  'fef412dd-88a3-48eb-8c12-93883a7983ea': <DataFrameClient ['gr_G', 'gr_r']>,
-        #  '9c1470af-dbd3-40f6-bea8-f5058e6bb146': <ArrayClient shape=(2048, 2048) chunks=((2048,), (2048,)) dtype=float64>,
-        #  '41ad8fdf-12d0-4c1a-b057-87032ba6f34b': <DataFrameClient ['fq_F', 'fq_Q', 'sq_Q', 'sq_S']>,
-        #  '6e2eedec-2a03-421a-96e4-59f77a27213c': <DataFrameClient ['chi_2theta', 'chi_Q', 'chi_I']>}
-
-        for key in data:
-            if key.startswith("tiled_"):  # the values are dictionaries (can't be used as keys)
-                continue
-            client = queries.get(data[key], None)  # check if the uid (=data[key]) is in the 'queries' keys, otherwise skip the filling.
-            if client is None:
-                continue
-            if isinstance(client, ArrayClient):  # image data
-                data[key] = client.read()
-            elif isinstance(client, DataFrameClient):  # Pandas DataFrames
-                new_key = key
-                if key in ["iq_I", "iq_Q"]:  # special case
-                    new_key = key.replace("iq", "chi")
-                data[key] = np.array(client.read()[new_key])
-            else:
-                raise TiledClientTypeException(f"Unknown tiled client type: {type(client)}")
+        # Get information for all fillable entries in 'an_data' dict from Tiled:
+        data = fill_data_from_tiled(data=data, tiled_client=self._tiled_client)
 
         print(f"{self.__class__.__name__} (after filling from Tiled): {pformat(doc)}")
 
@@ -773,7 +772,22 @@ class Visualizer(RunRouter):
 
     def __init__(self, config: VisConfig):
         self._factory = VisFactory(config)
-        super(Visualizer, self).__init__([self._factory])
+        super().__init__([self._factory])
+
+        self._tiled_client = from_uri("https://tiled.nsls2.bnl.gov/api/v1/metadata/xpd/sandbox")
+        print(f"{self._tiled_client = }")
+
+    def event(self, doc):
+        from pprint import pformat
+        io.server_message(f"{self.__class__.__name__} (before filling from Tiled): {pformat(doc)}")
+
+        data = doc["data"]
+        # Get information for all fillable entries in 'an_data' dict from Tiled:
+        data = fill_data_from_tiled(data=data, tiled_client=self._tiled_client)
+
+        io.server_message(f"{self.__class__.__name__} (after filling from Tiled): {pformat(doc)}")
+
+        return super().event(doc)
 
     def show_figs(self):
         """Show all the figures in the callbacks in the factory."""
