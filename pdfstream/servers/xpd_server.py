@@ -105,7 +105,7 @@ class XPDRouter(RunRouter):
 
     def __init__(self, config: XPDConfig):
         factory = XPDFactory(config)
-        super(XPDRouter, self).__init__(
+        super().__init__(
             [factory],
             handler_registry=databroker.mongo_normalized.discover_handlers()
         )
@@ -137,11 +137,16 @@ class XPDFactory:
                 )
             )
 
+            # self.analysis[0].subscribe(PublisherZMQ(**pub_config))
+            # if self.calibration:
+            #     self.calibration[0].subscribe(PublisherZMQ(**pub_config))
+
             # Kafka configuration for Producer:
-            pub_config = _get_kafka_producer_config(KafkaTopics.analysis.value)
-            self.analysis[0].subscribe(Publisher(**pub_config))
+            kafka_pub_config = _get_kafka_producer_config(KafkaTopics.analysis.value)
+
+            self.analysis[0].subscribe(PublisherKafkaAnalysis(**kafka_pub_config))
             if self.calibration:
-                self.calibration[0].subscribe(Publisher(**pub_config))
+                self.calibration[0].subscribe(PublisherKafkaAnalysis(**kafka_pub_config))
 
     def __call__(self, name: str, doc: dict) -> tp.Tuple[list, list]:
         if name == "start":
