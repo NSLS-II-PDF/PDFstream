@@ -4,7 +4,6 @@ import uuid
 
 import databroker.mongo_normalized
 from bluesky.callbacks.zmq import Publisher as PublisherZMQ
-from bluesky_kafka import Publisher as PublisherKafkaAnalysis
 from databroker.v1 import Broker
 from event_model import RunRouter
 
@@ -14,7 +13,7 @@ import pdfstream.io as io
 from pdfstream.callbacks.analysis import AnalysisConfig, VisConfig, ExportConfig, AnalysisStream, Exporter, \
     Visualizer
 from pdfstream.callbacks.calibration import CalibrationConfig, Calibration
-from pdfstream.servers.base import ServerConfig, BaseServer as BaseServerZMQ, BaseServerKafkaRaw, BaseServerKafkaAnalysis, _get_kafka_producer_config, KafkaTopics
+from pdfstream.servers.base import ServerConfig, BaseServer as BaseServerZMQ, BaseServerKafkaRaw, BaseServerKafkaAnalysis, _get_kafka_producer_config, KafkaTopics, PublisherKafkaAnalysis
 
 
 class XPDConfig(CalibrationConfig, AnalysisConfig, VisConfig, ExportConfig):
@@ -109,9 +108,6 @@ class XPDRouter(RunRouter):
             [factory],
             handler_registry=databroker.mongo_normalized.discover_handlers()
         )
-
-# Publisher = PublisherZMQ
-# Publisher = PublisherKafkaAnalysis
 
 
 class XPDFactory:

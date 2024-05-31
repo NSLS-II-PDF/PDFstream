@@ -5,7 +5,7 @@ from enum import Enum
 
 from bluesky.callbacks import CallbackBase
 from bluesky.callbacks.zmq import RemoteDispatcher as RemoteDispatcherZMQ
-from bluesky_kafka import RemoteDispatcher as RemoteDispatcherKafka
+from bluesky_kafka import RemoteDispatcher as RemoteDispatcherKafka, Publisher as PublisherKafka
 
 from nslsii.kafka_utils import _read_bluesky_kafka_config_file
 
@@ -122,6 +122,11 @@ class BaseServerKafkaAnalysis(BaseServerKafkaRaw):
     """The basic server class using Kafka message bus for consuming analysis data."""
     topic = KafkaTopics.analysis.value
 
+
+class PublisherKafkaAnalysis(PublisherKafka):
+    def __call__(self, name, doc):
+        doc["topic"] = KafkaTopics.analysis.value
+        return super().__call__(name, doc)
 
 
 from bluesky_widgets.qt.kafka_dispatcher import QtRemoteDispatcher
