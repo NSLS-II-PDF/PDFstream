@@ -1,7 +1,7 @@
 from bluesky.callbacks.best_effort import BestEffortCallback
 
 from pdfstream.callbacks.analysis import Visualizer, VisConfig
-from pdfstream.servers.base import BaseServer, ServerConfig
+from pdfstream.servers.base import BaseServer as BaseServerZMQ, BaseServerKafkaViz, ServerConfig
 
 
 class XPDVisServerConfig(ServerConfig, VisConfig):
@@ -9,7 +9,11 @@ class XPDVisServerConfig(ServerConfig, VisConfig):
     pass
 
 
-class XPDVisServer(BaseServer):
+BaseServerClass = BaseServerZMQ
+# BaseServerClass = BaseServerKafkaViz
+
+
+class XPDVisServer(BaseServerClass):
     """A server that visualizes the analyzed data from the xpd server."""
 
     def __init__(self, config: XPDVisServerConfig):

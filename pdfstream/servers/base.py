@@ -1,8 +1,13 @@
 import typing
+import uuid
 from configparser import ConfigParser
+from enum import Enum
 
 from bluesky.callbacks import CallbackBase
-from bluesky.callbacks.zmq import RemoteDispatcher
+from bluesky.callbacks.zmq import RemoteDispatcher as RemoteDispatcherZMQ
+from bluesky_kafka import RemoteDispatcher as RemoteDispatcherKafka, Publisher as PublisherKafka
+
+from nslsii.kafka_utils import _read_bluesky_kafka_config_file
 
 from pdfstream.io import server_message
 from pdfstream.vend.qt_kicker import install_qt_kicker
@@ -38,7 +43,7 @@ class ServerConfig(ConfigParser):
         return returned
 
 
-class BaseServer(RemoteDispatcher):
+class BaseServer(RemoteDispatcherZMQ):
     """The basic server class."""
 
     def __init__(self, config: ServerConfig):
@@ -57,6 +62,98 @@ class BaseServer(RemoteDispatcher):
 
     def install_qt_kicker(self):
         install_qt_kicker(self.loop)
+
+
+def _get_kafka_config(topic):
+    kafka_dict = {
+        "topics": [f"{topic}.bluesky.runengine.documents"],
+        "group_id": f"echo-{topic}-{str(uuid.uuid4())[:8]}",
+        "kafka_config": _read_bluesky_kafka_config_file(config_file_path="/etc/bluesky/kafka.yml"),
+    }
+    kafka_dict["bootstrap_servers"] = ",".join(kafka_dict["kafka_config"]["bootstrap_servers"])
+    return kafka_dict
+
+
+def _get_kafka_producer_config(topic):
+    kafka_dict = _get_kafka_config(topic=topic)
+    key = kafka_dict.pop("group_id")
+    topics = kafka_dict.pop("topics")
+    kafka_config = kafka_dict.pop("kafka_config")
+    return {"producer_config": kafka_config["runengine_producer_config"], "key": key, "topic": topics[0], **kafka_dict}
+
+
+def _get_kafka_consumer_config(topic):
+    kafka_dict = _get_kafka_config(topic=topic)
+    kafka_config = kafka_dict.pop("kafka_config")
+    return {"consumer_config": kafka_config["runengine_producer_config"], **kafka_dict}
+
+
+class KafkaTopics(Enum):
+    raw = "xpd"
+    analysis = "xpd-ldrd20-31"
+
+
+class BaseServerKafkaRaw(RemoteDispatcherKafka):
+    """The basic server class using Kafka message bus for consuming the raw data."""
+    topic = KafkaTopics.raw.value
+
+    def __init__(self, config: ServerConfig):
+
+        kafka_dict = _get_kafka_consumer_config(topic=self.topic)
+        super().__init__(**kafka_dict)
+        self._config = config
+        self._kafka_dict = kafka_dict
+
+    def start(self):
+        try:
+            server_message(
+                "Server is started. " +
+                "Listen to {}, topics {}.".format(self._kafka_dict["bootstrap_servers"], self._kafka_dict["topics"])
+            )
+            super().start()
+        except KeyboardInterrupt:
+            server_message("Server is terminated.")
+
+    def install_qt_kicker(self):
+        pass
+
+
+class BaseServerKafkaAnalysis(BaseServerKafkaRaw):
+    """The basic server class using Kafka message bus for consuming analysis data."""
+    topic = KafkaTopics.analysis.value
+
+
+class PublisherKafkaAnalysis(PublisherKafka):
+    def __call__(self, name, doc):
+        doc["topic"] = KafkaTopics.analysis.value
+        return super().__call__(name, doc)
+
+
+from bluesky_widgets.qt.kafka_dispatcher import QtRemoteDispatcher
+
+class BaseServerKafkaViz(QtRemoteDispatcher):
+    """NOT WORKING YET!!! The basic server class using Kafka message bus for consuming analysis data for plotting."""
+    topic = KafkaTopics.analysis.value
+
+    def __init__(self, config: ServerConfig):
+
+        kafka_dict = _get_kafka_consumer_config(topic=self.topic)
+        super().__init__(**kafka_dict)
+        self._config = config
+        self._kafka_dict = kafka_dict
+
+    def start(self):
+        try:
+            server_message(
+                "Server is started. " +
+                "Listen to {}, topics {}.".format(self._kafka_dict["bootstrap_servers"], self._kafka_dict["topics"])
+            )
+            super().start()
+        except KeyboardInterrupt:
+            server_message("Server is terminated.")
+
+    def install_qt_kicker(self):
+        pass
 
 
 class StartStopCallback(CallbackBase):

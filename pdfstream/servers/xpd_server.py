@@ -1,16 +1,19 @@
 """The analysis server. Process raw image to PDF."""
 import typing as tp
+import uuid
 
-import databroker.core
-from bluesky.callbacks.zmq import Publisher
+import databroker.mongo_normalized
+from bluesky.callbacks.zmq import Publisher as PublisherZMQ
 from databroker.v1 import Broker
 from event_model import RunRouter
+
+from nslsii.kafka_utils import _read_bluesky_kafka_config_file
 
 import pdfstream.io as io
 from pdfstream.callbacks.analysis import AnalysisConfig, VisConfig, ExportConfig, AnalysisStream, Exporter, \
     Visualizer
 from pdfstream.callbacks.calibration import CalibrationConfig, Calibration
-from pdfstream.servers.base import ServerConfig, BaseServer
+from pdfstream.servers.base import ServerConfig, BaseServer as BaseServerZMQ, BaseServerKafkaRaw, BaseServerKafkaAnalysis, _get_kafka_producer_config, KafkaTopics, PublisherKafkaAnalysis
 
 
 class XPDConfig(CalibrationConfig, AnalysisConfig, VisConfig, ExportConfig):
@@ -51,7 +54,11 @@ class XPDServerConfig(ServerConfig, XPDConfig):
     pass
 
 
-class XPDServer(BaseServer):
+# BaseServerClass = BaseServerZMQ
+BaseServerClass = BaseServerKafkaRaw
+
+
+class XPDServer(BaseServerClass):
     """The server of XPD data analysis. It is a live dispatcher with XPDRouter subscribed."""
     def __init__(self, config: XPDServerConfig):
         super(XPDServer, self).__init__(config)
@@ -97,9 +104,9 @@ class XPDRouter(RunRouter):
 
     def __init__(self, config: XPDConfig):
         factory = XPDFactory(config)
-        super(XPDRouter, self).__init__(
+        super().__init__(
             [factory],
-            handler_registry=databroker.core.discover_handlers()
+            handler_registry=databroker.mongo_normalized.discover_handlers()
         )
 
 
@@ -125,9 +132,17 @@ class XPDFactory:
                     pub_config["address"][0], pub_config["address"][1], pub_config["prefix"]
                 )
             )
-            self.analysis[0].subscribe(Publisher(**pub_config))
+
+            self.analysis[0].subscribe(PublisherZMQ(**pub_config))
             if self.calibration:
-                self.calibration[0].subscribe(Publisher(**pub_config))
+                self.calibration[0].subscribe(PublisherZMQ(**pub_config))
+
+            # Kafka configuration for Producer:
+            kafka_pub_config = _get_kafka_producer_config(KafkaTopics.analysis.value)
+
+            self.analysis[0].subscribe(PublisherKafkaAnalysis(**kafka_pub_config))
+            if self.calibration:
+                self.calibration[0].subscribe(PublisherKafkaAnalysis(**kafka_pub_config))
 
     def __call__(self, name: str, doc: dict) -> tp.Tuple[list, list]:
         if name == "start":
